@@ -1,91 +1,53 @@
-from fastapi import FastAPI, Request, BackgroundTasks
-from fastapi.responses import Response, FileResponse
-import httpx, os, uuid
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+import httpx
+import os
 from dotenv import load_dotenv
-load_dotenv()
-from pathlib import Path
 
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-BASE_URL = os.environ.get("BASE_URL", "https://yourapp.onrender.com")
-STATIC_DIR = Path("static"); STATIC_DIR.mkdir(exist_ok=True)
+load_dotenv()
 
 app = FastAPI()
 
-def twiml(body: str) -> Response:
-    return Response(content=body.strip(), media_type="application/xml")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-@app.post("/voice")
-async def voice():
-    return twiml("""    <Response>
-  <Say language="fi-FI">Hei! Miten kuuluu? Kerro minulle lyhyesti.</Say>
-  <Record action="/process_recording" maxLength="8" playBeep="false"/>
-  <Say language="fi-FI">En kuullut mitään. Yritetään uudelleen.</Say>
-  <Redirect>/voice</Redirect>
-</Response>
-""")
+@app.get("/")
+async def root():
+    return {"message": "Kehubotti on käynnissä!"}
 
-@app.post("/process_recording")
-async def process_recording(request: Request, background: BackgroundTasks):
-    form = await request.form()
-    recording_url = form.get("RecordingUrl")
-    rid = str(uuid.uuid4())
-    in_path = STATIC_DIR / f"{rid}.wav"
-    out_path = STATIC_DIR / f"{rid}_reply.mp3"
+@app.post("/chat")
+async def chat(request: Request):
+    data = await request.json()
+    user_message = data.get("message", "")
 
-    background.add_task(process_pipeline, recording_url, in_path, out_path)
-    audio_url = f"{BASE_URL}/static/{out_path.name}"
+    if not user_message:
+        return JSONResponse({"reply": "Kirjoita jotain ensin!"})
 
-    return twiml(f"""    <Response>
-  <Pause length="2"/>
-  <Play>{audio_url}</Play>
-  <Redirect>/voice</Redirect>
-</Response>
-""")
+    # OpenAI API-kutsu
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "gpt-3.5-turbo",
+                    "messages": [
+                        {"role": "system", "content": "Olet ystävällinen kehubotti, joka antaa kehuja ja hyvää mieltä."},
+                        {"role": "user", "content": user_message}
+                    ],
+                },
+                timeout=30.0
+            )
 
-async def process_pipeline(recording_url: str, in_path: Path, out_path: Path):
-    async with httpx.AsyncClient() as client:
-        r = await client.get(recording_url + ".wav")
-        in_path.write_bytes(r.content)
+        result = response.json()
+        reply = result["choices"][0]["message"]["content"].strip()
+        return {"reply": reply}
 
-    text = await whisper_stt(in_path)
-    compliment = await gpt_reply(text)
-    audio_bytes = await tts_mp3(compliment)
-    out_path.write_bytes(audio_bytes)
+    except Exception as e:
+        return {"reply": f"Virhe OpenAI-yhteydessä: {e}"}
 
-async def whisper_stt(path: Path) -> str:
-    import aiohttp
-    data = aiohttp.FormData()
-    data.add_field("file", path.read_bytes(), filename=path.name, content_type="audio/wav")
-    data.add_field("model", "whisper-1")
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
-    async with aiohttp.ClientSession() as s:
-        async with s.post("https://api.openai.com/v1/audio/transcriptions", data=data, headers=headers) as resp:
-            j = await resp.json()
-    return j.get("text", "") or "(hiljaisuus)"
-
-async def gpt_reply(user_text: str) -> str:
-    import aiohttp, json
-    payload = {
-        "model": "gpt-5",
-        "messages": [
-            {"role":"system","content":"Olet empaattinen kehuskelubotti suomeksi. Vastaa lyhyesti ja rohkaisevasti."},
-            {"role":"user","content": f"Soittaja sanoi: {user_text}"}
-        ]
-    }
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    async with aiohttp.ClientSession() as s:
-        async with s.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers) as resp:
-            j = await resp.json()
-    return j["choices"][0]["message"]["content"].strip()
-
-async def tts_mp3(text: str) -> bytes:
-    import aiohttp, json
-    payload = {"model":"gpt-4o-mini-tts","voice":"alloy","input":text}
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    async with aiohttp.ClientSession() as s:
-        async with s.post("https://api.openai.com/v1/audio/speech", json=payload, headers=headers) as resp:
-            return await resp.read()
-
-@app.get("/static/{name}")
-async def static_files(name: str):
-    return FileResponse(STATIC_DIR / name)
+@app.get("/health")
+async def health():
+    return {"status": "OK"}
