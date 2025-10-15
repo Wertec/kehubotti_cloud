@@ -12,6 +12,15 @@ BASE_URL = os.getenv("BASE_URL", "https://kehubotti-cloud.onrender.com")
 
 # --- Alustukset ---
 app = FastAPI()
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # salli kaikki domainit testauksen ajaksi
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 STATIC_DIR = Path("static")
 STATIC_DIR.mkdir(exist_ok=True)
 
