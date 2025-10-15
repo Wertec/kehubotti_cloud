@@ -53,6 +53,48 @@ async def chat(request: Request):
                 json={
                     "model": "gpt-3.5-turbo",
                     "messages": [
+                        {"role": "system", "content": "Olet ystävällinen ja empaattinen kehubotti, joka antaa kehuja ja positiivisia kommentteja suomeksi."},
+                        {"role": "user", "content": user_message}
+                    ],
+                },
+                timeout=30.0
+            )
+
+        # Tulostetaan tarkalleen mitä OpenAI palauttaa (debug)
+        result = response.json()
+        print("DEBUG OpenAI vastaus:", result)
+
+        if "error" in result:
+            err = result["error"].get("message", "Tuntematon virhe")
+            return {"reply": f"Virhe OpenAI-yhteydessä: {err}"}
+
+        choices = result.get("choices")
+        if not choices:
+            return {"reply": f"Virhe OpenAI-yhteydessä: ei sisältöä ({result})"}
+
+        reply = choices[0]["message"]["content"].strip()
+        return {"reply": reply}
+
+    except Exception as e:
+        return {"reply": f"Virhe OpenAI-yhteydessä: {e}"}
+
+    data = await request.json()
+    user_message = data.get("message", "")
+
+    if not user_message:
+        return JSONResponse({"reply": "Kirjoita jotain ensin!"})
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "gpt-3.5-turbo",
+                    "messages": [
                         {"role": "system", "content": "Olet ystävällinen ja empaattinen kehubotti, joka antaa lyhyitä kehuja ja positiivisia kommentteja suomeksi."},
                         {"role": "user", "content": user_message}
                     ],
